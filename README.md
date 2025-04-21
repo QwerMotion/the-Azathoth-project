@@ -31,3 +31,9 @@ http://localhost:8080/jump?pressed=true {"jumpPressed":true}
 http://localhost:8080/forward?pressed=true
 
 http://localhost:8080/look?yaw=90&pitch=30
+
+http://localhost:8080/block_status?x=100&y=64&z=100
+
+http://localhost:8080/place_block?x=100&y=64&z=100&block=minecraft:dirt
+
+http://localhost:8080/break_block?x=100&y=64&z=100
