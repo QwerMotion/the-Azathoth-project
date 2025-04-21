@@ -41,7 +41,9 @@ while True:
         draw_text(frame, f"X: {data['x']:.2f}", (10, 40))
         draw_text(frame, f"Y: {data['y']:.2f}", (10, 70))
         draw_text(frame, f"Z: {data['z']:.2f}", (10, 100))
-        draw_text(frame, f"Look: ({data['look_x']:.2f}, {data['look_y']:.2f}, {data['look_z']:.2f})", (10, 130))
+        draw_text(frame, f"Look: ({data['look_x']:.2f}, {data['look/setblock -38 64 309 minecraft:glass_block
+                  t/setblock -37 64 309 minecraft:glass_block
+                  _y']:.2f}, {data['look_z']:.2f})", (10, 130))
         draw_text(frame, f"faced Block: ({look_at_data['block']}, {look_at_data['x']:}, {look_at_data['y']:}, {look_at_data['z']:})", (10, 160))
 
     cv2.imshow("Spielerdaten", frame)
