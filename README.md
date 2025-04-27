@@ -1,3 +1,6 @@
+TODO: path should be scared of water, lava, gravel and sand 
+
+
 Endpoints: 
 
 http://localhost:8080/position
