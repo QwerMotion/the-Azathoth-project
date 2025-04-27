@@ -1,6 +1,4 @@
-package qwermotion.azathoth;
-
-
+package name.azathoth;
 
 import fi.iki.elonen.NanoHTTPD;
 import net.minecraft.client.MinecraftClient;

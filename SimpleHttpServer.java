@@ -1,4 +1,4 @@
-package qwermotion.azathoth;
+package name.azathoth;
 
 
 import com.sun.net.httpserver.HttpServer;
@@ -33,6 +33,8 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.util.*;
 
+
+
 public class SimpleHttpServer {
     private final HttpServer server;
     private final Gson gson = new Gson();
@@ -53,12 +55,137 @@ public class SimpleHttpServer {
         server.createContext("/place_block", this::handlePlaceBlock);
         server.createContext("/break_block", this::handleBreakBlock);
         server.createContext("/block_status", this::handleBlockStatus);
+        server.createContext("/find_path",      this::handleFindPath);
+        server.createContext("/visualize_path", this::handleVisualizePath);
+        server.createContext("/set_velocity", this::handleSetVelocity);
 
         server.setExecutor(null);
         server.start();
         System.out.println("Simple HTTP Server läuft auf Port 8080");
     }
 
+    private void handleSetVelocity(HttpExchange ex) throws IOException {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        ClientPlayerEntity player = mc.player;
+        Map<String,String> params = parseQuery(ex.getRequestURI());
+
+        if (player == null) {
+            sendError(ex, 500, "Spieler nicht verfügbar");
+            return;
+        }
+
+        try {
+            double vx = Double.parseDouble(params.getOrDefault("x", "0"));
+            double vy = Double.parseDouble(params.getOrDefault("y", "0"));
+            double vz = Double.parseDouble(params.getOrDefault("z", "0"));
+
+            // Auf dem Client-Thread ausführen
+            mc.execute(() -> {
+                player.setVelocity(vx, vy, vz);
+                // Stelle sicher, dass die Velocity übernommen wird
+                player.velocityModified = true;
+            });
+
+            // Einfach eine Rückmeldung als JSON
+            Map<String, Object> result = Map.of(
+                    "velocity_x", vx,
+                    "velocity_y", vy,
+                    "velocity_z", vz
+            );
+            sendJson(ex, result);
+
+        } catch (NumberFormatException nfe) {
+            sendError(ex, 400, "Ungültige Zahl: " + nfe.getMessage());
+        } catch (Exception e) {
+            sendError(ex, 500, "Fehler beim Setzen der Velocity: " + e.getMessage());
+        }
+    }
+
+
+
+    private void handleVisualizePath(HttpExchange ex) throws IOException {
+        MinecraftClient mc = MinecraftClient.getInstance();
+        World world = mc.world;
+        Map<String,String> p = parseQuery(ex.getRequestURI());
+
+        if (world == null) {
+            sendError(ex, 500, "Welt nicht verfügbar");
+            return;
+        }
+
+        try {
+            int sx = Integer.parseInt(p.get("sx"));
+            int sy = Integer.parseInt(p.get("sy"));
+            int sz = Integer.parseInt(p.get("sz"));
+            int gx = Integer.parseInt(p.get("gx"));
+            int gy = Integer.parseInt(p.get("gy"));
+            int gz = Integer.parseInt(p.get("gz"));
+            int maxRadius = Integer.parseInt(p.getOrDefault("r", "64"));
+
+            BlockPos start = new BlockPos(sx, sy, sz);
+            BlockPos goal  = new BlockPos(gx, gy, gz);
+
+            qwermotion.azathoth.Pathfinder.Path path = qwermotion.azathoth.Pathfinder.findPath(world, start, goal, maxRadius);
+            if (path == null) {
+                sendError(ex, 404, "Kein Pfad gefunden");
+                return;
+            }
+
+            // Auf dem Client‑Thread Glasspanes setzen
+            mc.execute(() -> {
+                for (List<Integer> coord : path.positions()) {
+                    BlockPos pos = new BlockPos(coord.get(0), coord.get(1), coord.get(2));
+                    world.setBlockState(pos, Blocks.RED_WOOL.getDefaultState());
+                }
+            });
+
+            // Rückgabe des Pfades als JSON (optional)
+            sendJson(ex, path);
+
+        } catch (Exception e) {
+            sendError(ex, 400, "Ungültige Parameter: " + e.getMessage());
+        }
+    }
+
+
+
+
+
+
+
+
+    private void handleFindPath(HttpExchange ex) throws IOException {
+        var mc = MinecraftClient.getInstance();
+        ClientPlayerEntity player = mc.player;
+        World world = mc.world;
+        if (player == null || world == null) {
+            sendError(ex, 500, "Spieler oder Welt nicht verfügbar");
+            return;
+        }
+
+        Map<String,String> p = parseQuery(ex.getRequestURI());
+        try {
+            int sx = Integer.parseInt(p.get("sx"));
+            int sy = Integer.parseInt(p.get("sy"));
+            int sz = Integer.parseInt(p.get("sz"));
+            int gx = Integer.parseInt(p.get("gx"));
+            int gy = Integer.parseInt(p.get("gy"));
+            int gz = Integer.parseInt(p.get("gz"));
+            int maxRadius = Integer.parseInt(p.getOrDefault("r", "64"));
+
+            BlockPos start = new BlockPos(sx, sy, sz);
+            BlockPos goal  = new BlockPos(gx, gy, gz);
+
+            qwermotion.azathoth.Pathfinder.Path result = qwermotion.azathoth.Pathfinder.findPath(world, start, goal, maxRadius);
+            if (result == null) {
+                sendError(ex, 404, "Kein Pfad gefunden");
+            } else {
+                sendJson(ex, result);
+            }
+        } catch (Exception e) {
+            sendError(ex, 400, "Ungültige Parameter: " + e.getMessage());
+        }
+    }
     private void handleBlockStatus(HttpExchange ex) throws IOException {
         var mc = MinecraftClient.getInstance();
         var world = mc.world;
@@ -146,6 +273,77 @@ public class SimpleHttpServer {
 
     // ====== Neuer Endpunkt: Block abbauen ======
     private void handleBreakBlock(HttpExchange ex) throws IOException {
+        var mc = MinecraftClient.getInstance();
+        ClientPlayerEntity player = mc.player;
+        var world = mc.world;
+        if (player == null || world == null) {
+            sendError(ex, 500, "Spieler oder Welt nicht verfügbar");
+            return;
+        }
+
+        Map<String, String> params = parseQuery(ex.getRequestURI());
+        try {
+            int x = Integer.parseInt(params.get("x"));
+            int y = Integer.parseInt(params.get("y"));
+            int z = Integer.parseInt(params.get("z"));
+            BlockPos target = new BlockPos(x, y, z);
+
+            // Werkzeug automatisch wählen
+            mc.execute(() -> selectBestToolFor(target));
+
+            // Starten und in Hintergrund fortlaufend progress senden
+            new Thread(() -> {
+                ClientPlayerInteractionManager im = mc.interactionManager;
+                Direction dir = Direction.UP;
+                // Block-Abbau starten
+                mc.execute(() -> im.attackBlock(target, dir));
+                // Solange nicht weg, weiter progress senden
+                while (world.getBlockState(target).getBlock() != Blocks.AIR) {
+                    mc.execute(() -> im.updateBlockBreakingProgress(target, dir));
+                    try { Thread.sleep(50); } catch (InterruptedException ignored) {}
+                }
+                // Abbau beendet
+            }, "BreakThread").start();
+
+            sendJson(ex, Map.of("breaking", List.of(x, y, z)));
+        } catch (Exception e) {
+            sendError(ex, 400, "Fehler: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Wählt automatisch das beste Werkzeug aus, um einen Block schneller abzubauen.
+     */
+    private void selectBestToolFor(BlockPos pos) {
+        var mc = MinecraftClient.getInstance();
+        var player = mc.player;
+        var world = mc.world;
+        if (player == null || world == null) return;
+
+        var blockState = world.getBlockState(pos);
+
+        float bestSpeed = 0f;
+        int bestSlot = -1;
+
+        for (int i = 0; i < 9; i++) { // Nur Hotbar-Slots durchsuchen (0-8)
+            var stack = player.getInventory().getStack(i);
+            if (stack.isEmpty()) continue;
+
+            float speed = stack.getMiningSpeedMultiplier(blockState);
+            if (speed > bestSpeed) {
+                bestSpeed = speed;
+                bestSlot = i;
+            }
+        }
+
+        if (bestSlot != -1 && player.getInventory().selectedSlot != bestSlot) {
+            player.getInventory().selectedSlot = bestSlot;
+        }
+    }
+
+
+    // ====== Neuer Endpunkt: Block abbauen ======
+    private void handleBreakBlock_olf(HttpExchange ex) throws IOException {
         var mc = MinecraftClient.getInstance();
         ClientPlayerEntity player = mc.player;
         var world = mc.world;
