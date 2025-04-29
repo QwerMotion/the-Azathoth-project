@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using static AzathothClient.Azathoth;
 
 namespace AzathothClient
 {
@@ -23,7 +24,7 @@ namespace AzathothClient
 
         // --- Endpoints ---
 
-        private Vec3 GetPlayerState()
+        public Vec3 GetPlayerState()
         {
             var resp = _http.GetStringAsync($"{_base}/position").Result;
             using var doc = JsonDocument.Parse(resp);
@@ -129,7 +130,7 @@ namespace AzathothClient
         public bool timedPlaceBlock(Vec3Int p, string block)
         {
             var task = Task.Run(() => PlaceBlock(p, block));
-            if (task.Wait(TimeSpan.FromSeconds(5)))
+            if (task.Wait(TimeSpan.FromSeconds(1)))
                 return true;
             else
                 Console.WriteLine("placing timed out!");
@@ -179,14 +180,15 @@ namespace AzathothClient
             var st = GetPlayerState();
             var p = new Dictionary<string, string>
             {
-                ["sx"] = ((int)st.X).ToString(),
-                ["sy"] = ((int)st.Y).ToString(),
-                ["sz"] = ((int)st.Z).ToString(),
+                ["sx"] = (Math.Floor(st.X)).ToString(),
+                ["sy"] = (Math.Floor(st.Y)).ToString(),
+                ["sz"] = (Math.Floor(st.Z)).ToString(),
                 ["gx"] = goal.X.ToString(),
                 ["gy"] = goal.Y.ToString(),
                 ["gz"] = goal.Z.ToString(),
                 ["r"] = radius.ToString()
             };
+            //Console.WriteLine("what the pathfinder gets: " + p["sx"] + " " + p["sy"] + " " + p["sz"] );
             var uri = $"{_base}/find_path?{ToQuery(p)}";
             var resp = _http.GetStringAsync(uri).Result;
             using var doc = JsonDocument.Parse(resp);
@@ -219,6 +221,18 @@ namespace AzathothClient
         {
             bool finished = false;
             Console.WriteLine($"Goto: received path with {path.Count} steps");
+            // Aktuelle Block-Koordinate
+            var state = GetPlayerState();
+            var curBlock = new Vec3Int(
+                (int)Math.Floor(state.X),
+                (int)Math.Floor(state.Y),
+                (int)Math.Floor(state.Z)
+            );
+            //Console.WriteLine("PlayerPos: " + curBlock.ToString());
+            foreach (var target in path)
+            {
+                Console.WriteLine(target.ToString());
+            }
             
             var now = DateTime.UtcNow;
 
@@ -228,8 +242,8 @@ namespace AzathothClient
                 var target = path[0];
 
                 // Aktuelle Block-Koordinate
-                var state = GetPlayerState();
-                var curBlock = new Vec3Int(
+                state = GetPlayerState();
+                curBlock = new Vec3Int(
                     (int)Math.Floor(state.X),
                     (int)Math.Floor(state.Y),
                     (int)Math.Floor(state.Z)
@@ -325,7 +339,7 @@ namespace AzathothClient
         {
             // Mitte des Zielblocks
             double tx = target.X + 0.5, ty = target.Y, tz = target.Z + 0.5;
-            const double tolH = 0.1, tolV = 0.2;
+            const double tolH = 0.2, tolV = 0.2;
             var overallStart = DateTime.UtcNow;
 
             // Aktuelle Block-Pos
@@ -491,10 +505,10 @@ namespace AzathothClient
             int stuckCounter = 0;
             int tryCounter = 0;
             
-
+            
             while (true) {
                 Console.WriteLine($"------ RUN: {tryCounter} FINISHED: {finishCounter} STUCK: {stuckCounter} ------");
-                var result = az.GetNextBlock("minecraft:oak_log", 128);
+                var result = az.GetNextBlock("minecraft:iron_ore", 128);
                 var path = az.GetPathTo(new Azathoth.Vec3Int(result.X, result.Y, result.Z));
                 finished = az.Goto(path);
                 if (finished)
@@ -508,6 +522,19 @@ namespace AzathothClient
                 tryCounter++;
             }
 
+            /**
+            while (true)
+            {
+                var s0 = az.GetPlayerState();
+                var curBlock = new Vec3Int(
+                    (int)Math.Floor(s0.X),
+                    (int)Math.Floor(s0.Y),
+                    (int)Math.Floor(s0.Z)
+                );
+                Console.WriteLine( curBlock.ToString() );
+            }
+            
+             * **/
         }
     }
 }
