@@ -70,6 +70,103 @@ namespace AzathothClient
             // return new Vec3Int(x, y, z);
         }
 
+        public List<Vec3Int> GetNextBlocks(string blockName, int r, int n = 10)
+        {
+            // Achtung: .Result blockiert den Thread. Für Produktions-Code besser async/await nutzen!
+            string response = _http
+                .GetStringAsync($"{_base}/next_blocks?block={blockName}&r={r}&n={n}")
+                .Result;
+
+            using var doc = JsonDocument.Parse(response);
+            var root = doc.RootElement;
+
+            // Falls ein Fehler zurückgegeben wurde, werfen wir eine Exception
+            if (root.TryGetProperty("error", out var err))
+            {
+                throw new InvalidOperationException(err.GetString());
+            }
+
+            var list = new List<Vec3Int>();
+            foreach (var elem in root.GetProperty("positions").EnumerateArray())
+            {
+                int x = elem.GetProperty("x").GetInt32();
+                int y = elem.GetProperty("y").GetInt32();
+                int z = elem.GetProperty("z").GetInt32();
+                list.Add(new Vec3Int(x, y, z));
+            }
+            return list;
+        }
+
+        public List<Vec3Int> GetNextBlocksSorted(string blockName, int r, int n = 10)
+        {
+            // 1) Aktuelle Spielerposition abfragen
+            Vec3 playerState = GetPlayerState();
+            var playerPos = new Vec3Int(
+                (int)Math.Floor(playerState.X),
+                (int)Math.Floor(playerState.Y),
+                (int)Math.Floor(playerState.Z)
+            );
+
+            // 2) Server anfragen
+            string response = _http
+                .GetStringAsync($"{_base}/next_blocks?block={blockName}&r={r}&n={n}")
+                .Result;
+
+            using var doc = JsonDocument.Parse(response);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("error", out var err))
+                throw new InvalidOperationException(err.GetString());
+
+            // 3) Alle Positionen einlesen – nur wenn x,y,z da sind
+            var list = new List<Vec3Int>();
+            if (root.TryGetProperty("positions", out var positionsProp))
+            {
+                foreach (var elem in positionsProp.EnumerateArray())
+                {
+                    if (!elem.TryGetProperty("x", out var xProp) ||
+                        !elem.TryGetProperty("y", out var yProp) ||
+                        !elem.TryGetProperty("z", out var zProp))
+                    {
+                        // Ein Element ohne vollständige Koordinaten überspringen
+                        continue;
+                    }
+
+                    // Jetzt sicher: x,y,z sind da
+                    int x = xProp.GetInt32();
+                    int y = yProp.GetInt32();
+                    int z = zProp.GetInt32();
+                    list.Add(new Vec3Int(x, y, z));
+                }
+            }
+            else
+            {
+                throw new KeyNotFoundException("Feld 'positions' nicht im Server-Response gefunden.");
+            }
+
+            // 4) Nach Entfernung sortieren (quadratischer Abstand genügt)
+            list.Sort((a, b) =>
+            {
+                long dxA = a.X - playerPos.X;
+                long dyA = a.Y - playerPos.Y;
+                long dzA = a.Z - playerPos.Z;
+                double distA = Math.Sqrt( dxA * dxA + dyA * dyA + dzA * dzA);
+
+                long dxB = b.X - playerPos.X;
+                long dyB = b.Y - playerPos.Y;
+                long dzB = b.Z - playerPos.Z;
+                double distB = Math.Sqrt(dxB * dxB + dyB * dyB + dzB * dzB);
+
+                return distA.CompareTo(distB);
+            });
+
+            return list;
+        }
+
+
+
+
+
         public void DestroyBlock_old(Vec3Int p)
         {
             //Console.WriteLine("destroying Block! " + p.ToString());
@@ -105,15 +202,23 @@ namespace AzathothClient
 
             // 2) Block abbauen
             //Console.WriteLine($"  ▶ Breaking block at {p}");
-            _http.GetAsync($"{_base}/break_block?x={p.X}&y={p.Y}&z={p.Z}").Wait();
+            if (!GetBlockStatus(p).Contains("water"))
 
-            // 3) Warten bis Luft
-            while (GetBlockStatus(p) != "minecraft:air")
             {
-                Thread.Sleep(50);
+
+                _http.GetAsync($"{_base}/break_block?x={p.X}&y={p.Y}&z={p.Z}").Wait();
+
+                // 3) Warten bis Luft
+                while (GetBlockStatus(p) != "minecraft:air")
+                {
+                    Thread.Sleep(50);
+                }
+
             }
 
+            Thread.Sleep(10);
             //Console.WriteLine("  ✔ Block destroyed");
+
         }
 
 
@@ -146,6 +251,8 @@ namespace AzathothClient
                 Console.WriteLine("breaking timed out!");
             return false;
         }
+
+        
 
         /// <summary>
         /// Setzt die Velocity des Spielers über deinen neuen HTTP‐Endpoint.
@@ -200,6 +307,16 @@ namespace AzathothClient
             return path;
         }
 
+        public List<Vec3Int> timedGetPathTo(Vec3Int goal, int radius = 128)
+        {
+            var task = Task.Run(() => GetPathTo(goal, radius));
+            if (task.Wait(TimeSpan.FromSeconds(5)))
+                return task.Result;
+            else
+                Console.WriteLine("getting Path timed out...");
+            return new List<Vec3Int>();
+        }
+
         private static string ToQuery(Dictionary<string, string> p)
         {
             var list = new List<string>();
@@ -214,10 +331,11 @@ namespace AzathothClient
                 Console.WriteLine($"\n>> Moving to block [{target.X}, {target.Y}, {target.Z}]");
                 MoveToBlockCenter(target);
             }
-            Console.WriteLine("==> All targets reached!");
+            Console.WriteLine("--------------All targets reached--------------");
         }
 
         public bool Goto(List<Vec3Int> path)
+            //der bool ist, ob das goto erfolgreich war (true, war erfolgreich. false, war nicht erfolgreich)
         {
             bool finished = false;
             Console.WriteLine($"Goto: received path with {path.Count} steps");
@@ -229,10 +347,10 @@ namespace AzathothClient
                 (int)Math.Floor(state.Z)
             );
             //Console.WriteLine("PlayerPos: " + curBlock.ToString());
-            foreach (var target in path)
-            {
-                Console.WriteLine(target.ToString());
-            }
+            //foreach (var target in path)
+            //{
+            //    Console.WriteLine(target.ToString());
+            //}
             
             var now = DateTime.UtcNow;
 
@@ -265,7 +383,7 @@ namespace AzathothClient
                 // 3) Schritt geschafft, aus Liste entfernen
                 path.RemoveAt(0);
 
-                if ((DateTime.UtcNow - now).TotalSeconds > Math.Max(30, path.Count))
+                if ((DateTime.UtcNow - now).TotalSeconds > Math.Max(15, path.Count * 5))
                 {
                     Console.WriteLine("goto timed out...");
                     return finished;
@@ -283,7 +401,7 @@ namespace AzathothClient
         {
             // Mitte des Zielblocks
             double tx = target.X + 0.5, ty = target.Y, tz = target.Z + 0.5;
-            const double tolH = 0.2, tolV = 0.2;
+            const double tolH = 0.01, tolV = 0.01;
             var overallStart = DateTime.UtcNow;
 
             // 1) Hindernisse räumen & Boden legen
@@ -339,7 +457,7 @@ namespace AzathothClient
         {
             // Mitte des Zielblocks
             double tx = target.X + 0.5, ty = target.Y, tz = target.Z + 0.5;
-            const double tolH = 0.2, tolV = 0.2;
+            const double tolH = 0.01, tolV = 0.01;
             var overallStart = DateTime.UtcNow;
 
             // Aktuelle Block-Pos
@@ -371,11 +489,11 @@ namespace AzathothClient
                 // Wenn wir nur genau hochbauen, fliegen wir über VerticalPhase vorab auf ty:
                 if (isDirectlyAbove)
                 {
-                    Console.WriteLine("  ↑ Pure up → using VerticalPhase for jump");
+                    //Console.WriteLine("  ↑ Pure up → using VerticalPhase for jump");
                     VerticalPhase(ty, tolV, 5);
                 }
 
-                Console.WriteLine("  Placing floor block");
+                //Console.WriteLine("  Placing floor block");
                 timedPlaceBlock(below, "minecraft:dirt");
             }
 
@@ -480,15 +598,50 @@ namespace AzathothClient
             }
         }
 
-        public void timedFarm(string blockname)
+        public void mine(string blockname, int count, int maxTrys=100)
         {
-            bool finished = false;
-            var now = DateTime.UtcNow;
+            int minedCounter = 0;
+            int pathIndex = 0; //welches result versuchen wir zu pathfinden
+            var results = GetNextBlocksSorted(blockname, 128, maxTrys);
 
-            while (!finished)
+            while (minedCounter < count)
             {
+                //abbauen versuchen
+                var path = timedGetPathTo(results[pathIndex]);
+                if (path.Count > 0)
+                {
+                    //az.Goto(path);
+                    Console.WriteLine("Managed to find path towards: " + results[pathIndex].ToString());
+                    bool geklappt = Goto(path);
+                    if (geklappt)
+                    {
+                        minedCounter++;
+                        Console.WriteLine("goal reached, recalculating...");
+                        results = GetNextBlocksSorted(blockname, 128, maxTrys);
+                        pathIndex = 0;
+                    }
+                    else
+                    {
+                        Console.WriteLine("goal NOT reached, recalculating...");
+                        results = GetNextBlocksSorted(blockname, 128, maxTrys);
+                        pathIndex = 0;
 
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("failed to find path towards: " + results[pathIndex].ToString());
+                }
+                pathIndex++;
+
+                if (pathIndex >= maxTrys)
+                {
+                    Console.WriteLine("Max try limit exceedet in mining: " + blockname);
+                    break;
+                }
             }
+
+            Console.WriteLine("Mining operation finished for: " + blockname);
         }
 
 
@@ -498,17 +651,19 @@ namespace AzathothClient
     {
         static void Main()
         {
-            //Thread.Sleep(2000);
+            Thread.Sleep(2000);
             var az = new Azathoth();
             bool finished = false;
             int finishCounter = 0;
             int stuckCounter = 0;
             int tryCounter = 0;
-            
-            
+
+            az.mine("minecraft:iron_ore", 20, 100);
+            /**
             while (true) {
                 Console.WriteLine($"------ RUN: {tryCounter} FINISHED: {finishCounter} STUCK: {stuckCounter} ------");
                 var result = az.GetNextBlock("minecraft:iron_ore", 128);
+                Console.WriteLine(result.ToString());
                 var path = az.GetPathTo(new Azathoth.Vec3Int(result.X, result.Y, result.Z));
                 finished = az.Goto(path);
                 if (finished)
@@ -522,7 +677,7 @@ namespace AzathothClient
                 tryCounter++;
             }
 
-            /**
+            
             while (true)
             {
                 var s0 = az.GetPlayerState();
