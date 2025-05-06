@@ -469,7 +469,7 @@ namespace AzathothClient
                 // 3) Schritt geschafft, aus Liste entfernen
                 path.RemoveAt(0);
 
-                if ((DateTime.UtcNow - now).TotalSeconds > Math.Max(15, path.Count * 50 + 30))
+                if ((DateTime.UtcNow - now).TotalSeconds > Math.Max(15, path.Count * 200))
                 {
                     Console.WriteLine("goto timed out..." + (DateTime.UtcNow - now).TotalSeconds.ToString());
                     return finished;
@@ -795,7 +795,7 @@ namespace AzathothClient
         }
 
 
-        public void mine(string blockname, int count, int maxTrys = 10)
+        public bool mine_old(string blockname, int count, int maxTrys = 10)
         {
             int minedCounter = 0;
             int pathIndex = 0; //welches result versuchen wir zu pathfinden
@@ -834,12 +834,64 @@ namespace AzathothClient
                 if (pathIndex >= maxTrys)
                 {
                     Console.WriteLine("Max try limit exceedet in mining: " + blockname);
-
-                    break;
+                    return false;
                 }
             }
 
             Console.WriteLine("Mining operation finished for: " + blockname);
+            return true;
+        }
+
+
+
+
+
+        public bool mine(string blockname, int maxTrys = 10)
+        {
+            
+            int pathIndex = 0; //welches result versuchen wir zu pathfinden
+            var results = GetNextBlocksSorted(blockname, 128, maxTrys);
+            int trys = 0;
+
+            while (true)
+            {
+                //abbauen versuchen
+                var path = GetPathTo(results[pathIndex], 256);
+                if (path.Count > 0)
+                {
+                    //az.Goto(path);
+                    Console.WriteLine("Managed to find path towards: " + results[pathIndex].ToString());
+                    bool geklappt = Goto(path);
+                    if (geklappt)
+                    {
+                        Console.WriteLine("goal reached, mine finished in try: "  + trys.ToString());
+                        return true;
+                    }
+                    else
+                    {
+                        Console.WriteLine("goal NOT reached, in try: " + trys.ToString());
+                        results = GetNextBlocksSorted(blockname, 128, maxTrys);
+                        pathIndex = 0;
+                        
+
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("failed to find path towards: " + results[pathIndex].ToString() + " try: " + trys.ToString());
+                    pathIndex++;
+                    trys++;
+                }
+                
+
+                if (trys >= maxTrys)
+                {
+                    Console.WriteLine("Max try limit exceedet in mining: " + blockname);
+                    return false;
+                }
+            }
+
+            
         }
 
 
@@ -856,13 +908,17 @@ namespace AzathothClient
             int stuckCounter = 0;
             int tryCounter = 0;
 
-            while (true) 
+            while (true)
             {
-                az.mine("minecraft:ancient_debris", 1, 10);
-                az.Wander(20);
+                finished = az.mine("minecraft:diamond_block", 1);
+                if (!finished) 
+                {
+                    az.Wander(20);
+                }
+                
             }
 
-            
+
             /**
             while (true) {
                 Console.WriteLine($"------ RUN: {tryCounter} FINISHED: {finishCounter} STUCK: {stuckCounter} ------");
