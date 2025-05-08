@@ -15,6 +15,9 @@ namespace AzathothClient
         private readonly HttpClient _http = new HttpClient();
         private readonly string _base;
 
+        Vec3Int craftingTablePosition;
+        Vec3Int furnacePosition;
+
         public Azathoth(string baseUrl = "http://localhost:8080")
         {
             _base = baseUrl.TrimEnd('/');
@@ -70,6 +73,100 @@ namespace AzathothClient
             // long y = e.GetProperty("y").GetInt64();
             // long z = e.GetProperty("z").GetInt64();
             // return new Vec3Int(x, y, z);
+        }
+
+
+        /// <summary>
+        /// Sendet einen Right-Click auf einen Block an (öffnet z.B. Werkbank/Ofen/Truhe)
+        /// </summary>
+        public void InteractBlock(int x, int y, int z, int side = 1, string hand = "main")
+        {
+            var uri = $"{_base}/interact_block?x={x}&y={y}&z={z}&side={side}&hand={hand}";
+            _http.GetAsync(uri).Wait();
+        }
+
+        /// <summary>
+        /// Schließt das aktuell offene GUI/Screen
+        /// </summary>
+        public void CloseScreen()
+        {
+            _http.GetAsync($"{_base}/close_screen").Wait();
+        }
+
+        /// <summary>
+        /// Hebt genau 1 Item aus Slot A auf und legt es per Rechtsklick in Slot B
+        /// </summary>
+        public void MoveItemSingle(int sourceSlot, int targetSlot)
+        {
+            Console.WriteLine($"moved from: {sourceSlot} to {targetSlot}");
+            var uri = $"{_base}/move_item_single?source={sourceSlot}&target={targetSlot}";
+            _http.GetAsync(uri).Wait();
+            Thread.Sleep(20);
+        }
+
+        /// <summary>
+        /// Führt einen Shift-Linksklick auf den angegebenen Slot aus
+        /// </summary>
+        public void ShiftClick(int slot)
+        {
+            var uri = $"{_base}/shift_click?slot={slot}";
+            _http.GetAsync(uri).Wait();
+            Thread.Sleep(20);
+        }
+
+        /// <summary>
+        /// Liest alle Slots des aktuell offenen Screens mit Item-ID und Count aus
+        /// </summary>
+        public Dictionary<int, (string item, int count)> ListSlots()
+        {
+            var uri = $"{_base}/list_slots";
+            var resp = _http.GetStringAsync(uri).Result;
+
+            using var doc = JsonDocument.Parse(resp);
+            var root = doc.RootElement;
+
+            // 1) Server-Error abfangen
+            if (root.TryGetProperty("error", out var errEl))
+            {
+                var msg = errEl.GetString() ?? "Unknown error";
+                throw new InvalidOperationException($"Server returned error: {msg}");
+            }
+
+            // 2) "slots"-Objekt holen
+            if (!root.TryGetProperty("slots", out var slotsEl)
+                || slotsEl.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException("Unerwartetes JSON: fehlt oder ist kein 'slots'-Objekt");
+            }
+
+            var result = new Dictionary<int, (string, int)>();
+            foreach (var prop in slotsEl.EnumerateObject())
+            {
+                // Slot-Index parsen
+                if (!int.TryParse(prop.Name, out var slotIndex))
+                    continue;
+
+                var slotObj = prop.Value;
+                string itemId = null;
+                int count = 0;
+
+                // "item" auslesen, wenn vorhanden und String
+                if (slotObj.TryGetProperty("item", out var itemEl)
+                    && itemEl.ValueKind == JsonValueKind.String)
+                {
+                    itemId = itemEl.GetString();
+                }
+                // "count" auslesen, wenn vorhanden und Number
+                if (slotObj.TryGetProperty("count", out var countEl)
+                    && countEl.TryGetInt32(out var c))
+                {
+                    count = c;
+                }
+
+                result[slotIndex] = (itemId, count);
+            }
+
+            return result;
         }
 
         public List<Vec3Int> GetNextBlocks(string blockName, int r, int n = 10)
@@ -224,11 +321,11 @@ namespace AzathothClient
         }
 
 
-        public void PlaceBlock(Vec3Int p, string block)
+        public void PlaceBlock(Vec3Int p, string block="minecraft:dirt")
         {
 
             //Console.WriteLine("placing Block! " + p.ToString());
-            _http.GetAsync($"{_base}/place_block?x={p.X}&y={p.Y}&z={p.Z}&block=minecraft:dirt".Replace(',', '.')).Wait();
+            _http.GetAsync($"{_base}/place_block?x={p.X}&y={p.Y}&z={p.Z}&block={block}".Replace(',', '.')).Wait();
             while (GetBlockStatus(p) != block)
             {
                 Thread.Sleep(50);
@@ -843,12 +940,18 @@ namespace AzathothClient
         }
 
 
+        public void mine_count(string blockname, int maxTrys = 10, int count = 1)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                mine(blockname);
+            }
 
-
+        }
 
         public bool mine(string blockname, int maxTrys = 10)
         {
-            
+
             int pathIndex = 0; //welches result versuchen wir zu pathfinden
             var results = GetNextBlocksSorted(blockname, 128, maxTrys);
             int trys = 0;
@@ -864,7 +967,7 @@ namespace AzathothClient
                     bool geklappt = Goto(path);
                     if (geklappt)
                     {
-                        Console.WriteLine("goal reached, mine finished in try: "  + trys.ToString());
+                        Console.WriteLine("goal reached, mine finished in try: " + trys.ToString());
                         return true;
                     }
                     else
@@ -872,7 +975,7 @@ namespace AzathothClient
                         Console.WriteLine("goal NOT reached, in try: " + trys.ToString());
                         results = GetNextBlocksSorted(blockname, 128, maxTrys);
                         pathIndex = 0;
-                        
+
 
                     }
                 }
@@ -882,7 +985,7 @@ namespace AzathothClient
                     pathIndex++;
                     trys++;
                 }
-                
+
 
                 if (trys >= maxTrys)
                 {
@@ -891,7 +994,70 @@ namespace AzathothClient
                 }
             }
 
-            
+
+        }
+
+        /// <summary>
+        /// Liest alle Slots ein und filtert diejenigen, die das gewünschte Item enthalten.
+        /// </summary>
+        public int FindItemSlots(string itemId)
+        {
+            var slots = ListSlots();  // nutzt die bereits robuste ListSlots()-Methode
+            var found = new List<int>();
+            foreach (var kv in slots)
+            {
+                if (kv.Value.item == itemId && kv.Value.count > 0)
+                    found.Add(kv.Key);
+            }
+            return found[0];
+        }
+
+        public int FindNumberOfSlots(
+            )
+        {
+            var slots = ListSlots();  // nutzt die bereits robuste ListSlots()-Methode
+            var found = new List<int>();
+            int counter = 0;
+            foreach (var kv in slots)
+            {
+               
+                counter++;
+            }
+            return counter - 1;
+        }
+
+        public void placeCraftingTable()
+        {
+            int tableSlot = FindItemSlots("minecraft:crafting_table");
+            int numSlots = FindNumberOfSlots();
+            Vec3 playerPos = GetPlayerState();
+            int playerXPos = (int)Math.Floor(playerPos.X);
+            int playerYPos = (int)Math.Floor(playerPos.Y);
+            int playerZPos = (int)Math.Floor(playerPos.Z);
+
+            Vec3Int tablePos = new Vec3Int(playerXPos + 1, playerYPos, playerZPos + 1);
+            timedBreakBlock(tablePos);
+            MoveItemSingle(tableSlot, numSlots - 1);
+            timedPlaceBlock(tablePos, "minecraft:crafting_table");
+
+            //set craftingtablepos
+            this.craftingTablePosition = tablePos;
+        }
+
+        public void craftCraftingTable()
+        {
+            int plankSlot = FindItemSlots("minecraft:oak_planks");
+            MoveItemSingle(plankSlot, 1);
+            MoveItemSingle(plankSlot, 2);
+            MoveItemSingle(plankSlot, 3);
+            MoveItemSingle(plankSlot, 4);
+            ShiftClick(0);
+        }
+        public void craftPlanks()
+        {
+            int logSlot = FindItemSlots("minecraft:oak_log");
+            MoveItemSingle(logSlot, 1);
+            ShiftClick(0);
         }
 
 
@@ -901,22 +1067,12 @@ namespace AzathothClient
     {
         static void Main()
         {
-            Thread.Sleep(2000);
             var az = new Azathoth();
-            bool finished = false;
-            int finishCounter = 0;
-            int stuckCounter = 0;
-            int tryCounter = 0;
+            az.mine("oak_log");
+            az.craftPlanks();
+            az.craftCraftingTable();
+            az.placeCraftingTable();
 
-            while (true)
-            {
-                finished = az.mine("minecraft:diamond_block", 1);
-                if (!finished) 
-                {
-                    az.Wander(20);
-                }
-                
-            }
 
 
             /**
